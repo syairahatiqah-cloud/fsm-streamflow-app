@@ -3,14 +3,13 @@
 # Streamlit App: FSM Imputation for WL/SF (Upload File Only)
 # - Upload Excel/CSV
 # - Choose datetime + value column
-# - Plot RAW time series (Plotly interactive + HTML download + PNG via Matplotlib)
+# - Plot RAW time series (Plotly interactive + HTML + PNG via Matplotlib)
 # - Missing data summary (SELECT Monthly or Yearly)
-#   * Outputs: CSV (monthly + yearly), HTML (monthly + yearly), PNG (monthly + yearly) via Matplotlib
+#   * Outputs: CSV, HTML, PNG (monthly/yearly)
 # - FSM Imputation (CSV download)
-# - Plot Original + FSM Imputed SEGMENTS ONLY (HTML + PNG via Matplotlib)
-#   * FSM imputed shown as RED DASHED line ONLY where values were imputed (no markers)
-# - Monthly seasonality original vs imputed (PNG via Matplotlib)
-# - Auto y-axis label: Water Level (m) vs Streamflow (m³/s)
+# - Time series plot: Original + FSM IMPUTED SEGMENTS ONLY (red dashed)
+#   * No full imputed line; only segments where original was missing
+# - Monthly seasonality: Original vs FULL infilled series (blue vs red)
 #
 # NOTE: Plotly PNG export (fig.to_image) is disabled because Streamlit Cloud
 # may not have Chrome available for Kaleido. PNGs are generated via Matplotlib.
@@ -41,8 +40,7 @@ def infer_yaxis_label(col_name: str) -> str:
 
 
 # ============================================================
-# Helper: build PNG bytes via Matplotlib (Cloud-safe)
-# - supports colors/linestyles/markers for highlighting
+# Helper: PNG bytes via Matplotlib (Cloud-safe)
 # ============================================================
 def line_png_bytes(
     x, y_list, labels, title, xlab, ylab,
@@ -65,8 +63,7 @@ def line_png_bytes(
     ax.set_xlabel(xlab)
     ax.set_ylabel(ylab)
     ax.grid(True, alpha=0.3)
-    if labels and any(lab is not None for lab in labels):
-        ax.legend()
+    ax.legend()
 
     for tick in ax.get_xticklabels():
         tick.set_rotation(rotate_xticks)
@@ -388,7 +385,6 @@ if uploaded is None:
     st.info("Upload an Excel (.xlsx/.xls) or CSV file to start.")
     st.stop()
 
-# Read file
 try:
     if uploaded.name.lower().endswith((".xlsx", ".xls")):
         df = pd.read_excel(uploaded)
@@ -411,7 +407,6 @@ if len(cols) < 2:
 time_col = st.selectbox("Select datetime column", cols, index=0)
 val_col = st.selectbox("Select WL/SF column", cols, index=1)
 
-# Parse datetime + numeric
 df[time_col] = pd.to_datetime(df[time_col], errors="coerce")
 df = df.dropna(subset=[time_col]).sort_values(time_col).reset_index(drop=True)
 
@@ -425,7 +420,7 @@ st.write(f"Missing values in selected series: {int(series.isna().sum())}")
 st.write(f"Detected variable type: **{data_type}** → y-axis label: **{y_label}**")
 
 # ============================================================
-# 1) Plot raw time series (HTML + PNG via Matplotlib)
+# 1) Raw time series (HTML + PNG)
 # ============================================================
 st.header("1) Raw Time Series Plot")
 
@@ -439,10 +434,9 @@ raw_fig.update_layout(
 )
 st.plotly_chart(raw_fig, use_container_width=True)
 
-raw_html = raw_fig.to_html(include_plotlyjs="cdn")
 st.download_button(
     "Download raw plot (HTML)",
-    data=raw_html.encode("utf-8"),
+    data=raw_fig.to_html(include_plotlyjs="cdn").encode("utf-8"),
     file_name=f"{val_col}_raw_time_series.html",
     mime="text/html"
 )
@@ -465,12 +459,11 @@ st.download_button(
 )
 
 # ============================================================
-# 2) Missing data summary (Select Monthly or Yearly)
+# 2) Missing data summary (Monthly / Yearly)
 # ============================================================
 st.header("2) Missing Data Summary (Monthly / Yearly)")
 
 monthly_summary, yearly_summary = compute_missing_summaries(df[time_col], series, val_col)
-
 choice = st.radio("Choose summary type:", ["Monthly", "Yearly"], horizontal=True)
 
 if choice == "Monthly":
@@ -488,14 +481,12 @@ if choice == "Monthly":
     )
     st.plotly_chart(miss_fig, use_container_width=True)
 
-    # Downloads (Monthly)
     st.download_button(
         "Download MONTHLY missing summary (CSV)",
         data=monthly_summary.to_csv(index=False).encode("utf-8"),
         file_name=f"{val_col}_monthly_missing_summary.csv",
         mime="text/csv"
     )
-
     st.download_button(
         "Download MONTHLY missing plot (HTML)",
         data=miss_fig.to_html(include_plotlyjs="cdn").encode("utf-8"),
@@ -532,14 +523,12 @@ else:
     )
     st.plotly_chart(miss_fig_y, use_container_width=True)
 
-    # Downloads (Yearly)
     st.download_button(
         "Download YEARLY missing summary (CSV)",
         data=yearly_summary.to_csv(index=False).encode("utf-8"),
         file_name=f"{val_col}_yearly_missing_summary.csv",
         mime="text/csv"
     )
-
     st.download_button(
         "Download YEARLY missing plot (HTML)",
         data=miss_fig_y.to_html(include_plotlyjs="cdn").encode("utf-8"),
@@ -577,7 +566,7 @@ run = st.button("Run FSM Imputation")
 
 if run:
     with st.spinner("Running FSM imputation..."):
-        imputed = impute_series_fsm(
+        imputed_full = impute_series_fsm(
             series,
             mode=mode,
             m_factor=float(m_factor),
@@ -589,29 +578,27 @@ if run:
     out_df = df.copy()
     imputed_col = f"{val_col}_FSM_{mode}"
     out_df[val_col] = series.values
-    out_df[imputed_col] = imputed.values
+    out_df[imputed_col] = imputed_full.values
 
     st.success("FSM imputation completed.")
     st.subheader("Preview imputed data")
     st.dataframe(out_df[[time_col, val_col, imputed_col]].head(50), use_container_width=True)
 
-    out_csv = out_df.to_csv(index=False).encode("utf-8")
     st.download_button(
         "Download imputed CSV",
-        data=out_csv,
+        data=out_df.to_csv(index=False).encode("utf-8"),
         file_name=f"{val_col}_FSM_imputed.csv",
         mime="text/csv"
     )
 
+    # --------------------------------------------------------
+    # Time series plot: Original + Imputed segments only
+    # --------------------------------------------------------
     st.subheader("Original + FSM Imputed Segments (Imputed only)")
 
-    # Mask: imputed where original is NaN and imputed exists
     imputed_mask = out_df[val_col].isna() & out_df[imputed_col].notna()
-
-    # Only imputed segments (NaN elsewhere) so red line appears only on imputed parts
     imputed_only = np.where(imputed_mask.to_numpy(), out_df[imputed_col].to_numpy(), np.nan)
 
-    # Plotly interactive
     fig2 = go.Figure()
     fig2.add_trace(go.Scatter(
         x=out_df[time_col],
@@ -625,7 +612,7 @@ if run:
         y=imputed_only,
         mode="lines",
         name="FSM Imputed (segments only)",
-        line=dict(color="red", width=2, dash="dash")   # dashed red
+        line=dict(color="red", width=2, dash="dash")
     ))
     fig2.update_layout(
         title=f"{data_type}: Original + FSM Imputed Segments ({mode})",
@@ -635,15 +622,13 @@ if run:
     )
     st.plotly_chart(fig2, use_container_width=True)
 
-    fig2_html = fig2.to_html(include_plotlyjs="cdn")
     st.download_button(
-        "Download plot (HTML)",
-        data=fig2_html.encode("utf-8"),
+        "Download segments plot (HTML)",
+        data=fig2.to_html(include_plotlyjs="cdn").encode("utf-8"),
         file_name=f"{val_col}_original_plus_fsm_imputed_segments.html",
         mime="text/html"
     )
 
-    # PNG via Matplotlib (dashed red segments only)
     png2 = line_png_bytes(
         x=out_df[time_col],
         y_list=[out_df[val_col].to_numpy(), imputed_only],
@@ -652,30 +637,30 @@ if run:
         xlab="Date and Time",
         ylab=y_label,
         colors=["blue", "red"],
-        linestyles=["-", "--"],
-        markers=[None, None]
+        linestyles=["-", "--"]
     )
-
     st.download_button(
-        "Download plot (PNG)",
+        "Download segments plot (PNG)",
         data=png2,
         file_name=f"{val_col}_original_plus_fsm_imputed_segments.png",
         mime="image/png"
     )
 
-    # Monthly seasonality original vs imputed (PNG)
-    st.subheader("Monthly Seasonality (Original vs FSM Imputed)")
+    # --------------------------------------------------------
+    # Monthly seasonality: Original vs FULL infilled series
+    # --------------------------------------------------------
+    st.subheader("Monthly Seasonality (Original vs FULL FSM Infilled)")
 
     season_df = out_df[[time_col, val_col, imputed_col]].copy()
     season_df["Month"] = pd.to_datetime(season_df[time_col]).dt.month
 
     avg_orig = season_df.groupby("Month")[val_col].mean().reset_index()
-    avg_imp = season_df.groupby("Month")[imputed_col].mean().reset_index()
+    avg_full = season_df.groupby("Month")[imputed_col].mean().reset_index()
 
     figm, ax = plt.subplots(figsize=(10, 4))
     ax.plot(avg_orig["Month"], avg_orig[val_col], marker="o", label="Original", color="blue")
-    ax.plot(avg_imp["Month"], avg_imp[imputed_col], marker="x", linestyle="--", label="FSM Imputed", color="red")
-    ax.set_title(f"Monthly Seasonality ({data_type}): Original vs FSM Imputed")
+    ax.plot(avg_full["Month"], avg_full[imputed_col], marker="x", linestyle="--", label="FULL FSM Infilled", color="red")
+    ax.set_title(f"Monthly Seasonality ({data_type}): Original vs FULL FSM Infilled")
     ax.set_xlabel("Month")
     ax.set_ylabel(y_label)
     ax.set_xticks(range(1, 13))
@@ -694,6 +679,6 @@ if run:
     st.download_button(
         "Download monthly seasonality plot (PNG)",
         data=buf.getvalue(),
-        file_name=f"{val_col}_monthly_seasonality_original_vs_fsm.png",
+        file_name=f"{val_col}_monthly_seasonality_original_vs_full_fsm.png",
         mime="image/png"
-    )  remove the time series plot for whole imputed data and only show dashed line for segments imputed. but also, I need monthly seasonality to compare original vs full infilled (not only segments). correct the script.  provide full corrected script.
+    )
