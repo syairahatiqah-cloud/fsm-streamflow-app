@@ -4,7 +4,8 @@
 # - Upload Excel/CSV
 # - Choose datetime + value column
 # - Plot RAW time series (Plotly interactive + HTML download + PNG via Matplotlib)
-# - Monthly missing summary (CSV + HTML + PNG via Matplotlib)
+# - Missing data summary (SELECT Monthly or Yearly)
+#   * Outputs: CSV (monthly + yearly), HTML (monthly + yearly), PNG (monthly + yearly) via Matplotlib
 # - FSM Imputation (CSV download)
 # - Plot RAW vs Imputed (HTML + PNG via Matplotlib)
 #   * FSM imputed line in RED + highlight imputed points in RED markers
@@ -100,6 +101,41 @@ def bar_png_bytes(x, y, title, xlab, ylab, figsize=(12, 4), rotate_xticks=45):
 
 
 # ============================================================
+# Helper: missing summary (monthly + yearly)
+# ============================================================
+def compute_missing_summaries(df_dt: pd.Series, series: pd.Series, value_name: str):
+    tmp = pd.DataFrame({"dt": df_dt, value_name: series})
+    tmp = tmp.dropna(subset=["dt"]).copy()
+
+    tmp["Year"] = tmp["dt"].dt.year
+    tmp["Month"] = tmp["dt"].dt.month
+
+    # Monthly
+    miss_m = (
+        tmp.groupby(["Year", "Month"])[value_name]
+        .apply(lambda x: x.isnull().sum())
+        .reset_index(name="Missing_Count")
+    )
+    tot_m = tmp.groupby(["Year", "Month"]).size().reset_index(name="Total_Observations")
+    monthly = pd.merge(miss_m, tot_m, on=["Year", "Month"], how="left")
+    monthly["Missing_Percentage"] = (monthly["Missing_Count"] / monthly["Total_Observations"]) * 100
+    monthly["YearMonth"] = monthly["Year"].astype(str) + "-" + monthly["Month"].astype(str).str.zfill(2)
+
+    # Yearly
+    miss_y = (
+        tmp.groupby(["Year"])[value_name]
+        .apply(lambda x: x.isnull().sum())
+        .reset_index(name="Missing_Count")
+    )
+    tot_y = tmp.groupby(["Year"]).size().reset_index(name="Total_Observations")
+    yearly = pd.merge(miss_y, tot_y, on=["Year"], how="left")
+    yearly["Missing_Percentage"] = (yearly["Missing_Count"] / yearly["Total_Observations"]) * 100
+    yearly["Year"] = yearly["Year"].astype(int)
+
+    return monthly, yearly
+
+
+# ============================================================
 # FSM helper functions (your original logic)
 # ============================================================
 def find_na_gaps(x: pd.Series):
@@ -179,13 +215,11 @@ def fsm_find_best_match(values: np.ndarray,
     for start in indices:
         end = start + z - 1
 
-        # skip windows overlapping the current gap
         if not (end < gap_start or start > gap_end):
             continue
 
         S_window = values[start:end + 1].astype(float)
 
-        # if any NaN in distance positions, skip
         if np.any(np.isnan(S_window[valid_mask])):
             continue
 
@@ -430,84 +464,102 @@ st.download_button(
 )
 
 # ============================================================
-# 2) Monthly missing summary (CSV + HTML + PNG via Matplotlib)
+# 2) Missing data summary (Select Monthly or Yearly)
 # ============================================================
-st.header("2) Monthly Missing Data Summary")
+st.header("2) Missing Data Summary (Monthly / Yearly)")
 
-tmp = pd.DataFrame({time_col: df[time_col], val_col: series})
-tmp["Year"] = tmp[time_col].dt.year
-tmp["Month"] = tmp[time_col].dt.month
+monthly_summary, yearly_summary = compute_missing_summaries(df[time_col], series, val_col)
 
-missing_values_per_month = (
-    tmp.groupby(["Year", "Month"])[val_col]
-    .apply(lambda x: x.isnull().sum())
-    .reset_index(name="Missing_Count")
-)
-total_observations_per_month = (
-    tmp.groupby(["Year", "Month"])
-    .size()
-    .reset_index(name="Total_Observations_Month")
-)
+choice = st.radio("Choose summary type:", ["Monthly", "Yearly"], horizontal=True)
 
-monthly_summary = pd.merge(
-    missing_values_per_month,
-    total_observations_per_month,
-    on=["Year", "Month"],
-    how="left"
-)
+if choice == "Monthly":
+    st.subheader("Monthly Missing Data Summary")
+    st.dataframe(monthly_summary, use_container_width=True)
 
-monthly_summary["Missing_Percentage"] = (
-    monthly_summary["Missing_Count"] / monthly_summary["Total_Observations_Month"]
-) * 100
+    miss_fig = go.Figure()
+    miss_fig.add_trace(go.Bar(x=monthly_summary["YearMonth"], y=monthly_summary["Missing_Percentage"], name="Missing %"))
+    miss_fig.update_layout(
+        title=f"Monthly Missing Data Percentage: {val_col}",
+        xaxis_title="Year-Month",
+        yaxis_title="Missing Percentage (%)",
+        xaxis_tickangle=-45,
+        hovermode="x unified"
+    )
+    st.plotly_chart(miss_fig, use_container_width=True)
 
-monthly_summary["YearMonth"] = (
-    monthly_summary["Year"].astype(str)
-    + "-"
-    + monthly_summary["Month"].astype(str).str.zfill(2)
-)
+    # Downloads (Monthly)
+    st.download_button(
+        "Download MONTHLY missing summary (CSV)",
+        data=monthly_summary.to_csv(index=False).encode("utf-8"),
+        file_name=f"{val_col}_monthly_missing_summary.csv",
+        mime="text/csv"
+    )
 
-st.dataframe(monthly_summary.head(50), use_container_width=True)
+    st.download_button(
+        "Download MONTHLY missing plot (HTML)",
+        data=miss_fig.to_html(include_plotlyjs="cdn").encode("utf-8"),
+        file_name=f"{val_col}_monthly_missing_plot.html",
+        mime="text/html"
+    )
 
-miss_fig = go.Figure()
-miss_fig.add_trace(go.Bar(x=monthly_summary["YearMonth"], y=monthly_summary["Missing_Percentage"], name="Missing %"))
-miss_fig.update_layout(
-    title=f"Monthly Missing Data Percentage: {val_col}",
-    xaxis_title="Year-Month",
-    yaxis_title="Missing Percentage (%)",
-    xaxis_tickangle=-45,
-    hovermode="x unified"
-)
-st.plotly_chart(miss_fig, use_container_width=True)
+    miss_png = bar_png_bytes(
+        x=monthly_summary["YearMonth"].tolist(),
+        y=monthly_summary["Missing_Percentage"].tolist(),
+        title=f"Monthly Missing Data Percentage: {val_col}",
+        xlab="Year-Month",
+        ylab="Missing Percentage (%)"
+    )
+    st.download_button(
+        "Download MONTHLY missing plot (PNG)",
+        data=miss_png,
+        file_name=f"{val_col}_monthly_missing_plot.png",
+        mime="image/png"
+    )
 
-monthly_csv = monthly_summary.to_csv(index=False).encode("utf-8")
-st.download_button(
-    "Download monthly missing summary (CSV)",
-    data=monthly_csv,
-    file_name=f"{val_col}_monthly_missing_summary.csv",
-    mime="text/csv"
-)
+else:
+    st.subheader("Yearly Missing Data Summary")
+    st.dataframe(yearly_summary, use_container_width=True)
 
-miss_html = miss_fig.to_html(include_plotlyjs="cdn")
-st.download_button(
-    "Download monthly missing plot (HTML)",
-    data=miss_html.encode("utf-8"),
-    file_name=f"{val_col}_monthly_missing_plot.html",
-    mime="text/html"
-)
+    miss_fig_y = go.Figure()
+    miss_fig_y.add_trace(go.Bar(x=yearly_summary["Year"].astype(str), y=yearly_summary["Missing_Percentage"], name="Missing %"))
+    miss_fig_y.update_layout(
+        title=f"Yearly Missing Data Percentage: {val_col}",
+        xaxis_title="Year",
+        yaxis_title="Missing Percentage (%)",
+        xaxis_tickangle=-45,
+        hovermode="x unified"
+    )
+    st.plotly_chart(miss_fig_y, use_container_width=True)
 
-miss_png = bar_png_bytes(
-    x=monthly_summary["YearMonth"].tolist(),
-    y=monthly_summary["Missing_Percentage"].tolist(),
-    title=f"Monthly Missing Data Percentage: {val_col}",
-    xlab="Year-Month",
-    ylab="Missing Percentage (%)"
-)
-st.download_button(
-    "Download monthly missing plot (PNG)",
-    data=miss_png,
-    file_name=f"{val_col}_monthly_missing_plot.png",
-    mime="image/png"
-)
+    # Downloads (Yearly)
+    st.download_button(
+        "Download YEARLY missing summary (CSV)",
+        data=yearly_summary.to_csv(index=False).encode("utf-8"),
+        file_name=f"{val_col}_yearly_missing_summary.csv",
+        mime="text/csv"
+    )
+
+    st.download_button(
+        "Download YEARLY missing plot (HTML)",
+        data=miss_fig_y.to_html(include_plotlyjs="cdn").encode("utf-8"),
+        file_name=f"{val_col}_yearly_missing_plot.html",
+        mime="text/html"
+    )
+
+    miss_png_y = bar_png_bytes(
+        x=yearly_summary["Year"].astype(str).tolist(),
+        y=yearly_summary["Missing_Percentage"].tolist(),
+        title=f"Yearly Missing Data Percentage: {val_col}",
+        xlab="Year",
+        ylab="Missing Percentage (%)",
+        rotate_xticks=0
+    )
+    st.download_button(
+        "Download YEARLY missing plot (PNG)",
+        data=miss_png_y,
+        file_name=f"{val_col}_yearly_missing_plot.png",
+        mime="image/png"
+    )
 
 # ============================================================
 # 3) FSM Imputation (CSV + plots)
