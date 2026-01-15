@@ -7,8 +7,8 @@
 # - Missing data summary (SELECT Monthly or Yearly)
 #   * Outputs: CSV (monthly + yearly), HTML (monthly + yearly), PNG (monthly + yearly) via Matplotlib
 # - FSM Imputation (CSV download)
-# - Plot RAW vs Imputed (HTML + PNG via Matplotlib)
-#   * FSM imputed line in RED + highlight imputed points in RED markers
+# - Plot Original + FSM Imputed SEGMENTS ONLY (HTML + PNG via Matplotlib)
+#   * FSM imputed shown as RED DASHED line ONLY where values were imputed (no markers)
 # - Monthly seasonality original vs imputed (PNG via Matplotlib)
 # - Auto y-axis label: Water Level (m) vs Streamflow (m³/s)
 #
@@ -59,7 +59,7 @@ def line_png_bytes(
         markers = [None] * len(y_list)
 
     for y, lab, c, ls, mk in zip(y_list, labels, colors, linestyles, markers):
-        ax.plot(x, y, label=lab, color=c, linestyle=ls, marker=mk, linewidth=1)
+        ax.plot(x, y, label=lab, color=c, linestyle=ls, marker=mk, linewidth=1.5)
 
     ax.set_title(title)
     ax.set_xlabel(xlab)
@@ -454,7 +454,8 @@ raw_png = line_png_bytes(
     title=f"{data_type} Time Series: {val_col}",
     xlab="Date and Time",
     ylab=y_label,
-    colors=["blue"]
+    colors=["blue"],
+    linestyles=["-"]
 )
 st.download_button(
     "Download raw plot (PNG)",
@@ -526,7 +527,7 @@ else:
         title=f"Yearly Missing Data Percentage: {val_col}",
         xaxis_title="Year",
         yaxis_title="Missing Percentage (%)",
-        xaxis_tickangle=-45,
+        xaxis_tickangle=0,
         hovermode="x unified"
     )
     st.plotly_chart(miss_fig_y, use_container_width=True)
@@ -602,12 +603,15 @@ if run:
         mime="text/csv"
     )
 
-    st.subheader("Raw vs FSM Imputed Plot")
+    st.subheader("Original + FSM Imputed Segments (Imputed only)")
 
-    # Identify imputed points: original NaN but imputed is not NaN
+    # Mask: imputed where original is NaN and imputed exists
     imputed_mask = out_df[val_col].isna() & out_df[imputed_col].notna()
 
-    # Plotly interactive chart with colors
+    # Only imputed segments (NaN elsewhere) so red line appears only on imputed parts
+    imputed_only = np.where(imputed_mask.to_numpy(), out_df[imputed_col].to_numpy(), np.nan)
+
+    # Plotly interactive
     fig2 = go.Figure()
     fig2.add_trace(go.Scatter(
         x=out_df[time_col],
@@ -618,20 +622,13 @@ if run:
     ))
     fig2.add_trace(go.Scatter(
         x=out_df[time_col],
-        y=out_df[imputed_col],
+        y=imputed_only,
         mode="lines",
-        name="FSM Imputed",
-        line=dict(color="red", width=1.5, dash="dot")
-    ))
-    fig2.add_trace(go.Scatter(
-        x=out_df.loc[imputed_mask, time_col],
-        y=out_df.loc[imputed_mask, imputed_col],
-        mode="markers",
-        name="Imputed points",
-        marker=dict(color="red", size=4, opacity=0.8)
+        name="FSM Imputed (segments only)",
+        line=dict(color="red", width=2, dash="dash")   # dashed red
     ))
     fig2.update_layout(
-        title=f"{data_type}: Original vs FSM Imputed ({mode})",
+        title=f"{data_type}: Original + FSM Imputed Segments ({mode})",
         xaxis_title="Date and Time",
         yaxis_title=y_label,
         hovermode="x unified"
@@ -640,33 +637,29 @@ if run:
 
     fig2_html = fig2.to_html(include_plotlyjs="cdn")
     st.download_button(
-        "Download raw vs imputed plot (HTML)",
+        "Download plot (HTML)",
         data=fig2_html.encode("utf-8"),
-        file_name=f"{val_col}_raw_vs_fsm_imputed.html",
+        file_name=f"{val_col}_original_plus_fsm_imputed_segments.html",
         mime="text/html"
     )
 
-    # PNG via Matplotlib with RED FSM + red imputed markers
+    # PNG via Matplotlib (dashed red segments only)
     png2 = line_png_bytes(
         x=out_df[time_col],
-        y_list=[
-            out_df[val_col].to_numpy(),
-            out_df[imputed_col].to_numpy(),
-            np.where(imputed_mask.to_numpy(), out_df[imputed_col].to_numpy(), np.nan)
-        ],
-        labels=["Original", f"FSM ({mode})", "Imputed points"],
-        title=f"{data_type}: Original vs FSM Imputed ({mode})",
+        y_list=[out_df[val_col].to_numpy(), imputed_only],
+        labels=["Original", "FSM Imputed (segments only)"],
+        title=f"{data_type}: Original + FSM Imputed Segments ({mode})",
         xlab="Date and Time",
         ylab=y_label,
-        colors=["blue", "red", "red"],
-        linestyles=["-", ":", "None"],
-        markers=[None, None, "o"]
+        colors=["blue", "red"],
+        linestyles=["-", "--"],
+        markers=[None, None]
     )
 
     st.download_button(
-        "Download raw vs imputed plot (PNG)",
+        "Download plot (PNG)",
         data=png2,
-        file_name=f"{val_col}_raw_vs_fsm_imputed.png",
+        file_name=f"{val_col}_original_plus_fsm_imputed_segments.png",
         mime="image/png"
     )
 
@@ -703,4 +696,4 @@ if run:
         data=buf.getvalue(),
         file_name=f"{val_col}_monthly_seasonality_original_vs_fsm.png",
         mime="image/png"
-    )
+    )  remove the time series plot for whole imputed data and only show dashed line for segments imputed. but also, I need monthly seasonality to compare original vs full infilled (not only segments). correct the script.  provide full corrected script.
