@@ -537,40 +537,113 @@ if run:
 
     st.subheader("Raw vs FSM Imputed Plot")
 
-    fig2 = go.Figure()
-    fig2.add_trace(go.Scatter(x=out_df[time_col], y=out_df[val_col], mode="lines", name="Original"))
-    fig2.add_trace(go.Scatter(x=out_df[time_col], y=out_df[imputed_col], mode="lines", name="FSM Imputed", line=dict(dash="dot")))
-    fig2.update_layout(
-        title=f"{data_type}: Original vs FSM Imputed ({mode})",
-        xaxis_title="Date and Time",
-        yaxis_title=y_label,
-        hovermode="x unified"
-    )
-    st.plotly_chart(fig2, use_container_width=True)
+# Identify which points were imputed (True where original is NaN but imputed has value)
+imputed_mask = out_df[val_col].isna() & out_df[imputed_col].notna()
 
-    fig2_html = fig2.to_html(include_plotlyjs="cdn")
-    st.download_button(
-        "Download raw vs imputed plot (HTML)",
-        data=fig2_html.encode("utf-8"),
-        file_name=f"{val_col}_raw_vs_fsm_imputed.html",
-        mime="text/html"
-    )
+# -------------------------
+# Plotly (interactive)
+# -------------------------
+fig2 = go.Figure()
+
+# Original line (blue default)
+fig2.add_trace(go.Scatter(
+    x=out_df[time_col],
+    y=out_df[val_col],
+    mode="lines",
+    name="Original",
+    line=dict(color="blue", width=1)
+))
+
+# FSM imputed line (RED)
+fig2.add_trace(go.Scatter(
+    x=out_df[time_col],
+    y=out_df[imputed_col],
+    mode="lines",
+    name="FSM Imputed",
+    line=dict(color="red", width=1.5, dash="dot")
+))
+
+# Optional: highlight imputed points as red markers
+fig2.add_trace(go.Scatter(
+    x=out_df.loc[imputed_mask, time_col],
+    y=out_df.loc[imputed_mask, imputed_col],
+    mode="markers",
+    name="Imputed points",
+    marker=dict(color="red", size=4, opacity=0.8)
+))
+
+fig2.update_layout(
+    title=f"{data_type}: Original vs FSM Imputed ({mode})",
+    xaxis_title="Date and Time",
+    yaxis_title=y_label,
+    hovermode="x unified"
+)
+
+st.plotly_chart(fig2, use_container_width=True)
+
+fig2_html = fig2.to_html(include_plotlyjs="cdn")
+st.download_button(
+    "Download raw vs imputed plot (HTML)",
+    data=fig2_html.encode("utf-8"),
+    file_name=f"{val_col}_raw_vs_fsm_imputed.html",
+    mime="text/html"
+)
 
     # PNG via Matplotlib
-    png2 = line_png_bytes(
-        x=out_df[time_col],
-        y_list=[out_df[val_col].to_numpy(), out_df[imputed_col].to_numpy()],
-        labels=["Original", f"FSM ({mode})"],
-        title=f"{data_type}: Original vs FSM Imputed ({mode})",
-        xlab="Date and Time",
-        ylab=y_label
-    )
-    st.download_button(
-        "Download raw vs imputed plot (PNG)",
-        data=png2,
-        file_name=f"{val_col}_raw_vs_fsm_imputed.png",
-        mime="image/png"
-    )
+def line_png_bytes(x, y_list, labels, title, xlab, ylab,
+                   figsize=(12, 4), rotate_xticks=45,
+                   colors=None, linestyles=None, markers=None):
+    fig, ax = plt.subplots(figsize=figsize)
+
+    if colors is None:
+        colors = [None] * len(y_list)
+    if linestyles is None:
+        linestyles = ["-"] * len(y_list)
+    if markers is None:
+        markers = [None] * len(y_list)
+
+    for y, lab, c, ls, mk in zip(y_list, labels, colors, linestyles, markers):
+        ax.plot(x, y, label=lab, color=c, linestyle=ls, marker=mk, linewidth=1)
+
+    ax.set_title(title)
+    ax.set_xlabel(xlab)
+    ax.set_ylabel(ylab)
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+
+    for tick in ax.get_xticklabels():
+        tick.set_rotation(rotate_xticks)
+        tick.set_ha("right")
+
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=300)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
+
+png2 = line_png_bytes(
+    x=out_df[time_col],
+    y_list=[
+        out_df[val_col].to_numpy(),
+        out_df[imputed_col].to_numpy(),
+        np.where(imputed_mask.to_numpy(), out_df[imputed_col].to_numpy(), np.nan)
+    ],
+    labels=["Original", f"FSM ({mode})", "Imputed points"],
+    title=f"{data_type}: Original vs FSM Imputed ({mode})",
+    xlab="Date and Time",
+    ylab=y_label,
+    colors=["blue", "red", "red"],
+    linestyles=["-", ":", "None"],
+    markers=[None, None, "o"]
+)
+
+st.download_button(
+    "Download raw vs imputed plot (PNG)",
+    data=png2,
+    file_name=f"{val_col}_raw_vs_fsm_imputed.png",
+    mime="image/png"
+)
 
     st.subheader("Monthly Seasonality (Original vs FSM Imputed)")
 
@@ -605,3 +678,4 @@ if run:
         file_name=f"{val_col}_monthly_seasonality_original_vs_fsm.png",
         mime="image/png"
     )
+
